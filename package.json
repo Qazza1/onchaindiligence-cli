@@ -1,0 +1,39 @@
+{
+  "name": "@onchaindiligence/cli",
+  "version": "0.1.0",
+  "description": "Command-line client for the OnchainDiligence compliance API. Screen wallets, names, and companies — and verify signed attestations locally, with no key required.",
+  "type": "module",
+  "bin": {
+    "onchaindiligence": "./bin/cli.js",
+    "ocd": "./bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "compliance",
+    "sanctions",
+    "ofac",
+    "screening",
+    "aml",
+    "kyb",
+    "attestation",
+    "cli",
+    "onchaindiligence"
+  ],
+  "homepage": "https://onchaindiligence.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Qazza1/onchaindiligence-cli"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@onchaindiligence/sdk": "^0.2.0",
+    "mppx": "^0.7.0",
+    "viem": "^2.53.1"
+  }
+}

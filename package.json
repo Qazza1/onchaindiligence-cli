@@ -1,6 +1,6 @@
 {
   "name": "@onchaindiligence/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Command-line client for the OnchainDiligence compliance API. Screen wallets, names, and companies — and verify signed attestations locally, with no key required.",
   "type": "module",
   "bin": {

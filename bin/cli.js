@@ -19,7 +19,7 @@
 import { OnchainDiligence } from '@onchaindiligence/sdk'
 import { readFileSync } from 'node:fs'
 
-const VERSION = '0.1.0'
+const VERSION = '0.1.1'
 const BASE_URL = process.env.OCD_BASE_URL || undefined // SDK defaults to production
 
 // ---- tiny ANSI helpers (no dependency) ----

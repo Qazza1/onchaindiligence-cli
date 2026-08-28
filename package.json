@@ -1,6 +1,6 @@
 {
   "name": "@onchaindiligence/cli",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Command-line client for the OnchainDiligence compliance API. Screen wallets, names, and companies — and verify signed attestations locally, with no key required.",
   "type": "module",
   "bin": {
@@ -32,8 +32,11 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@onchaindiligence/sdk": "^0.2.0",
+    "@onchaindiligence/sdk": "https://codeload.github.com/Qazza1/onchaindiligence-sdk/tar.gz/5bdc9c244e3231bdd15b2750201b85e7126a591a",
     "mppx": "^0.7.0",
     "viem": "^2.53.1"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
   }
 }

@@ -5,8 +5,8 @@
  * A thin command-line wrapper over @onchaindiligence/sdk.
  *
  * Design principle (honest by construction):
- *   - FREE commands (verify, health, anchored) require no key and run with a
- *     bare `npx @onchaindiligence/cli <cmd>` — genuinely zero-config.
+ *   - FREE commands require no payer key. Verification additionally requires
+ *     caller-selected trust material (or an explicit online lookup flag).
  *   - PAID commands (screen, screen-name, company, us-company, diligence,
  *     anchor) each settle a real per-call payment, so they need a funded payer
  *     key in the PAYER_KEY env var. If it's missing, we fail with a clear,
@@ -16,10 +16,15 @@
  * the published SDK, so the CLI and the SDK can never drift.
  */
 
-import { OnchainDiligence } from '@onchaindiligence/sdk'
+import {
+  OnchainDiligence,
+  parseJsonNoDuplicateKeys,
+  verifyAttestationOffline,
+  verifyAttestationOnline,
+} from '@onchaindiligence/sdk'
 import { readFileSync } from 'node:fs'
 
-const VERSION = '0.1.1'
+const VERSION = '0.2.0'
 const BASE_URL = process.env.OCD_BASE_URL || undefined // SDK defaults to production
 
 // ---- tiny ANSI helpers (no dependency) ----
@@ -47,14 +52,22 @@ function die(msg, code = 1) {
 
 // ---- arg parsing (minimal, no dependency) ----
 const argv = process.argv.slice(2)
-const flags = { json: false }
+const flags = { json: false, fetchKeys: false, trust: undefined }
 const positional = []
-for (const a of argv) {
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i]
   if (a === '--json') flags.json = true
   else if (a === '--help' || a === '-h') flags.help = true
   else if (a === '--version' || a === '-v') flags.version = true
   else if (a.startsWith('--threshold=')) flags.threshold = Number(a.split('=')[1])
-  else if (a.startsWith('--')) { /* ignore unknown flags gracefully */ }
+  else if (a === '--fetch-keys') flags.fetchKeys = true
+  else if (a.startsWith('--trust=')) flags.trust = a.slice('--trust='.length)
+  else if (a === '--trust') {
+    const value = argv[++i]
+    if (!value || value.startsWith('--')) die('--trust requires a path', 2)
+    flags.trust = value
+  }
+  else if (a.startsWith('--')) die(`unknown flag: ${a}`, 2)
   else positional.push(a)
 }
 
@@ -67,7 +80,7 @@ ${bold('Usage')}
   npx @onchaindiligence/cli <command> [args] [--json]
 
 ${bold('Free commands')} ${dim('(no key required)')}
-  verify <file.json>        Verify a signed attestation locally (Ed25519)
+  verify <file.json>        Verify offline with --trust <keys.json>
   health                    Show API + upstream status
   anchored <signature>      Check if an attestation is anchored on Tempo
 
@@ -77,10 +90,12 @@ ${bold('Paid commands')} ${dim('(require PAYER_KEY env var)')}
   company <number>          Verify a UK company (Companies House)
   us-company <query>        Verify a US public company (SEC EDGAR)
   diligence <addr> <num>    Wallet + company in one call
-  anchor <signature>        Anchor an attestation hash on Tempo
+  anchor <file.json>        Anchor a complete signed attestation envelope
 
 ${bold('Flags')}
   --json                    Raw JSON output (for piping)
+  --trust <keys.json>       Caller-trusted key registry for offline verify
+  --fetch-keys              Explicitly fetch and trust the issuer registry
   --threshold=N             Name-screen match threshold (screen-name only)
   -h, --help                Show this help
   -v, --version             Show version
@@ -88,7 +103,7 @@ ${bold('Flags')}
 ${bold('Paying for checks')}
   Paid commands settle a real per-call payment on-chain. Set a funded payer key:
     ${dim('export PAYER_KEY=0x…   # a viem private key with funds on the payment rail')}
-  Free commands (verify, health, anchored) need no key.
+  Free commands need no payer key; verify requires --trust or --fetch-keys.
 
   Docs: https://onchaindiligence.com/docs`
 
@@ -127,44 +142,67 @@ function paidClient() {
 // used for shape — free methods never sign. To stay honest and avoid a fake
 // account, we call the free HTTP endpoints directly for health, and use the
 // SDK's account-free verify path for verify. anchored also hits a free GET.
+function readTextFile(file, label = 'file') {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch (e) {
+    die(`could not read ${label}: ${file}`)
+  }
+}
+
+function readJsonFile(file, label = 'file') {
+  const raw = readTextFile(file, label)
+  try {
+    return parseJsonNoDuplicateKeys(raw)
+  } catch (e) {
+    die(`${file} is not valid unambiguous JSON: ${e && e.message ? e.message : e}`)
+  }
+}
+
+function normalizeTrustMaterial(value) {
+  if (Array.isArray(value)) return { keys: value }
+  if (value && typeof value === 'object' && Array.isArray(value.keys)) return value
+  die('trust material must be a registry object with a "keys" array (or the array itself)', 2)
+}
+
 async function freeVerify(file) {
-  let raw
-  try {
-    raw = readFileSync(file, 'utf8')
-  } catch (e) {
-    die(`could not read file: ${file}`)
+  if (flags.trust && flags.fetchKeys) {
+    die('choose either --trust for offline verification or --fetch-keys for explicit online discovery', 2)
   }
-  let signed
-  try {
-    signed = JSON.parse(raw)
-  } catch (e) {
-    die(`${file} is not valid JSON`)
-  }
-  if (!signed || !signed.attestation) {
-    die('that file has no "attestation" field — paste the full signed response.')
-  }
-  if (signed.attestation.signed === false) {
-    process.stdout.write(yellow('unsigned: ') + 'this response was not signed, so there is nothing to verify.\n')
-    process.exit(2)
+  if (!flags.trust && !flags.fetchKeys) {
+    die('verify requires --trust <keys.json>; use --fetch-keys only when online registry trust is intentional', 2)
   }
 
-  // Verify locally against the published key, no account needed.
-  // We reconstruct the SDK's verifyAttestation without a payer by using a
-  // minimal client whose account is never used by verifyAttestation.
-  const od = new OnchainDiligence({ account: /** inert */ {}, baseUrl: BASE_URL })
+  const raw = readTextFile(file)
   let res
   try {
-    res = await od.verifyAttestation(signed)
+    if (flags.trust) {
+      const trust = normalizeTrustMaterial(readJsonFile(flags.trust, 'trust file'))
+      res = await verifyAttestationOffline(raw, trust)
+    } else {
+      res = await verifyAttestationOnline(raw, {
+        baseUrl: BASE_URL,
+        trustRegistry: true,
+      })
+    }
   } catch (e) {
     die('verification could not run: ' + (e && e.message ? e.message : e))
   }
-  if (res.valid) {
-    process.stdout.write(green('✓ valid') + dim(`  key ${res.keyId || 'ok'}\n`))
-    process.exit(0)
-  } else {
-    process.stdout.write(red('✗ invalid') + `  ${res.reason || 'signature did not verify'}\n`)
-    process.exit(3)
+  if (flags.json) out(res)
+  else {
+    const marker = res.state === 'VALID' ? green('✓ VALID') : res.state === 'INVALID' ? red('✗ INVALID') : yellow('? UNVERIFIABLE')
+    process.stdout.write(`${marker}  ${res.reason}\n`)
+    process.stdout.write(dim(`  key: ${res.keyId || 'unresolved'}  code: ${res.code}\n`))
   }
+  process.exit(res.state === 'VALID' ? 0 : res.state === 'INVALID' ? 3 : 4)
+}
+
+function readAnchorEnvelope(file) {
+  const envelope = readJsonFile(file)
+  if (!envelope || typeof envelope !== 'object' || !Object.hasOwn(envelope, 'data') || !envelope.attestation) {
+    die('anchor requires a file containing the complete signed response envelope', 2)
+  }
+  return envelope
 }
 
 async function freeHealth() {
@@ -249,9 +287,11 @@ async function main() {
       if (!wallet && !company) die('usage: diligence <address> <company-number>')
       return runPaid((od) => od.diligence({ wallet, company }))
     }
-    case 'anchor':
-      if (!arg1) die('usage: anchor <signature>')
-      return runPaid((od) => od.anchor(arg1))
+    case 'anchor': {
+      if (!arg1) die('usage: anchor <file.json>', 2)
+      const envelope = readAnchorEnvelope(arg1)
+      return runPaid((od) => od.anchor(envelope))
+    }
 
     default:
       die(`unknown command: ${command}\n  Run ${dim('onchaindiligence --help')} for usage.`)

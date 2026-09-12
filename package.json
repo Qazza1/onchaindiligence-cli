@@ -32,7 +32,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@onchaindiligence/sdk": "https://codeload.github.com/Qazza1/onchaindiligence-sdk/tar.gz/5bdc9c244e3231bdd15b2750201b85e7126a591a",
+    "@onchaindiligence/sdk": "^0.5.0",
     "mppx": "^0.7.0",
     "viem": "^2.53.1"
   },

@@ -43,7 +43,7 @@ function fixture() {
   }
 }
 
-test('packed installed CLI verifies a receipt with zero network access', async (t) => {
+test('packed installed CLI reports its manifest version and verifies a receipt with zero network access', async (t) => {
   const packed = await runNpm(['pack', '--json'], { cwd: root, env: process.env })
   assert.equal(packed.code, 0, `${packed.stderr}\n${packed.stdout}`)
   const tarball = join(root, JSON.parse(packed.stdout)[0].filename)
@@ -62,6 +62,9 @@ test('packed installed CLI verifies a receipt with zero network access', async (
   writeFileSync(trustPath, JSON.stringify(trust))
   writeFileSync(hookPath, "globalThis.fetch = async () => { throw new Error('offline verification attempted network access') }\n")
   const installedCli = join(dir, 'node_modules', '@onchaindiligence', 'cli', 'bin', 'cli.js')
+  const version = await run(process.execPath, [installedCli, '--version'], { cwd: dir })
+  assert.equal(version.code, 0, version.stderr)
+  assert.equal(version.stdout.trim(), '@onchaindiligence/cli 0.3.1')
   const verified = await run(process.execPath, [installedCli, 'verify', artifactPath, '--trust', trustPath, '--json'], { cwd: dir, env: { NODE_OPTIONS: `--import=${new URL(`file:///${hookPath.replace(/\\/g, '/')}`).href}` } })
   assert.equal(verified.code, 0, verified.stderr)
   assert.equal(JSON.parse(verified.stdout).state, 'VALID')

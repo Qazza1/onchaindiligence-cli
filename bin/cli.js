@@ -25,7 +25,9 @@ import {
 import { readFileSync } from 'node:fs'
 import { createHash, createPublicKey } from 'node:crypto'
 
-const VERSION = '0.2.0'
+// Read this from the installed package rather than duplicating it in the
+// executable, so `ocd --version` always describes the package being run.
+const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 const BASE_URL = process.env.OCD_BASE_URL || undefined // SDK defaults to production
 const TRUSTED_KEY_ID = /^ed25519-[A-Za-z0-9_-]{16}$/
 const TRUSTED_KEY_STATUS = new Set(['active', 'retired', 'revoked', 'compromised'])

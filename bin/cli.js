@@ -23,9 +23,26 @@ import {
   verifyAttestationOnline,
 } from '@onchaindiligence/sdk'
 import { readFileSync } from 'node:fs'
+import { createHash, createPublicKey } from 'node:crypto'
 
 const VERSION = '0.2.0'
 const BASE_URL = process.env.OCD_BASE_URL || undefined // SDK defaults to production
+const TRUSTED_KEY_ID = /^ed25519-[A-Za-z0-9_-]{16}$/
+const TRUSTED_KEY_STATUS = new Set(['active', 'retired', 'revoked', 'compromised'])
+// Every item here is the same signed `{ data, attestation }` envelope. The
+// CLI deliberately does not interpret payment/action business semantics; it
+// verifies the shared attestation contract and reports only its tri-state
+// cryptographic result.
+const CURRENT_ATTESTATION_PURPOSES = [
+  'compliance-screening-result',
+  'verification-fixture',
+  'public-action-receipt',
+  'erc20-allowance-action',
+  'swap-action',
+  'bridge-action',
+  'staking-action',
+]
+const PUBLIC_ACTION_RECEIPT_SCHEMA = 'onchaindiligence.public-action-receipt.v1'
 
 // ---- tiny ANSI helpers (no dependency) ----
 const isTTY = process.stdout.isTTY
@@ -159,10 +176,103 @@ function readJsonFile(file, label = 'file') {
   }
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function exactIsoTimestamp(value) {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(Date.parse(value)).toISOString() === value
+}
+
+function trustError(message) {
+  die(`trust file is invalid: ${message}`, 2)
+}
+
+function normalizedOptionalTimestamp(value, name) {
+  if (value === undefined || value === null) return null
+  if (!exactIsoTimestamp(value)) trustError(`${name} must be an exact UTC ISO-8601 timestamp or null`)
+  return value
+}
+
+function normalizedOptionalString(value, name) {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'string' || value.length === 0) trustError(`${name} must be a non-empty string or null`)
+  return value
+}
+
+/**
+ * Build the caller's offline trust policy. This performs no network I/O.
+ * The canonical file form is `{ keys: [...] }`; the bare array form remains
+ * accepted only for CLI 0.2 compatibility and is normalized immediately.
+ */
 function normalizeTrustMaterial(value) {
-  if (Array.isArray(value)) return { keys: value }
-  if (value && typeof value === 'object' && Array.isArray(value.keys)) return value
-  die('trust material must be a registry object with a "keys" array (or the array itself)', 2)
+  const material = Array.isArray(value) ? { keys: value } : value
+  if (!isRecord(material) || !Array.isArray(material.keys)) {
+    trustError('expected a registry object with a keys array')
+  }
+  if (material.registry_version !== undefined && (!Number.isSafeInteger(material.registry_version) || material.registry_version < 1)) {
+    trustError('registry_version must be a positive safe integer when present')
+  }
+  if (material.issuer !== undefined && (typeof material.issuer !== 'string' || material.issuer.length === 0)) {
+    trustError('issuer must be a non-empty string when present')
+  }
+  if (material.trust_source !== undefined && (typeof material.trust_source !== 'string' || material.trust_source.length === 0)) {
+    trustError('trust_source must be a non-empty string when present')
+  }
+
+  const seenKeyIds = new Set()
+  const keys = material.keys.map((candidate, index) => {
+    const label = `keys[${index}]`
+    if (!isRecord(candidate)) trustError(`${label} must be an object`)
+    if (typeof candidate.key_id !== 'string' || !TRUSTED_KEY_ID.test(candidate.key_id)) trustError(`${label}.key_id must be an ed25519 key identifier`)
+    if (seenKeyIds.has(candidate.key_id)) trustError(`duplicate key_id ${candidate.key_id}`)
+    seenKeyIds.add(candidate.key_id)
+    if (candidate.algorithm !== 'ed25519') trustError(`${label}.algorithm must be ed25519`)
+    if (typeof candidate.public_key_pem !== 'string' || candidate.public_key_pem.length === 0) trustError(`${label}.public_key_pem is required`)
+    if (typeof candidate.status !== 'string' || !TRUSTED_KEY_STATUS.has(candidate.status)) trustError(`${label}.status is invalid`)
+
+    let publicKey
+    try { publicKey = createPublicKey(candidate.public_key_pem) }
+    catch { trustError(`${label}.public_key_pem is not a usable public key`) }
+    if (publicKey.asymmetricKeyType !== 'ed25519') trustError(`${label}.public_key_pem is not an Ed25519 key`)
+    const derivedKeyId = `ed25519-${createHash('sha256').update(publicKey.export({ type: 'spki', format: 'der' })).digest('base64url').slice(0, 16)}`
+    if (derivedKeyId !== candidate.key_id) trustError(`${label}.key_id does not match its SPKI public key`)
+
+    const validFrom = normalizedOptionalTimestamp(candidate.valid_from, `${label}.valid_from`)
+    const validUntil = normalizedOptionalTimestamp(candidate.valid_until, `${label}.valid_until`)
+    if (validFrom && validUntil && Date.parse(validUntil) < Date.parse(validFrom)) trustError(`${label} has an incoherent validity interval`)
+    return {
+      key_id: candidate.key_id,
+      algorithm: 'ed25519',
+      public_key_pem: candidate.public_key_pem,
+      status: candidate.status,
+      valid_from: validFrom,
+      valid_until: validUntil,
+      status_changed_at: normalizedOptionalTimestamp(candidate.status_changed_at, `${label}.status_changed_at`),
+      status_reason: normalizedOptionalString(candidate.status_reason, `${label}.status_reason`),
+      replacement_key_id: normalizedOptionalString(candidate.replacement_key_id, `${label}.replacement_key_id`),
+      compromised_at: normalizedOptionalTimestamp(candidate.compromised_at, `${label}.compromised_at`),
+    }
+  })
+  return { keys, ...(material.issuer ? { issuer: material.issuer } : {}), ...(material.trust_source ? { trust_source: material.trust_source } : {}), ...(material.registry_version ? { registry_version: material.registry_version } : {}) }
+}
+
+/**
+ * Public Action Receipt v1 has a transport wrapper (`receipt` + `proof`),
+ * but its proof signs the same v2 `{ data, attestation }` contract as every
+ * other current artifact. Adapt only that wrapper; receipt/payment business
+ * fields remain signed data, not CLI verification policy.
+ */
+function normalizeArtifactForVerification(value) {
+  if (
+    isRecord(value) &&
+    value.schema === PUBLIC_ACTION_RECEIPT_SCHEMA &&
+    isRecord(value.receipt) &&
+    isRecord(value.proof)
+  ) {
+    return { data: value.receipt, attestation: value.proof }
+  }
+  return value
 }
 
 async function freeVerify(file) {
@@ -173,16 +283,17 @@ async function freeVerify(file) {
     die('verify requires --trust <keys.json>; use --fetch-keys only when online registry trust is intentional', 2)
   }
 
-  const raw = readTextFile(file)
   let res
   try {
+    const artifact = normalizeArtifactForVerification(readJsonFile(file, 'artifact'))
     if (flags.trust) {
       const trust = normalizeTrustMaterial(readJsonFile(flags.trust, 'trust file'))
-      res = await verifyAttestationOffline(raw, trust)
+      res = await verifyAttestationOffline(artifact, trust, { allowedPurposes: CURRENT_ATTESTATION_PURPOSES })
     } else {
-      res = await verifyAttestationOnline(raw, {
+      res = await verifyAttestationOnline(artifact, {
         baseUrl: BASE_URL,
         trustRegistry: true,
+        allowedPurposes: CURRENT_ATTESTATION_PURPOSES,
       })
     }
   } catch (e) {

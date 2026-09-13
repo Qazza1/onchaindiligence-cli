@@ -12,7 +12,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const cli = join(here, '..', 'bin', 'cli.js')
 const noNetwork = pathToFileURL(join(here, 'prevent-network.mjs')).href
 
-function fixture() {
+function fixture(purpose = 'compliance-screening-result') {
   const pair = generateKeyPairSync('ed25519')
   const der = pair.publicKey.export({ type: 'spki', format: 'der' })
   const keyId = `ed25519-${createHash('sha256').update(der).digest('base64url').slice(0, 16)}`
@@ -23,7 +23,7 @@ function fixture() {
     issued_at: issuedAt,
     issuer: 'https://api.onchaindiligence.com',
     key_id: keyId,
-    purpose: 'compliance-screening-result',
+    purpose,
     schema_version: 'onchaindiligence.attestation.v2',
   })
   const envelope = {
@@ -32,7 +32,7 @@ function fixture() {
       signed: true,
       schema_version: 'onchaindiligence.attestation.v2',
       issuer: 'https://api.onchaindiligence.com',
-      purpose: 'compliance-screening-result',
+      purpose,
       issued_at: issuedAt,
       key_id: keyId,
       algorithm: 'ed25519',
@@ -104,6 +104,62 @@ test('verify returns distinct INVALID and UNVERIFIABLE exit codes', async () => 
   const unverifiable = await run(['verify', envelopePath, '--trust', emptyTrustPath, '--json'])
   assert.equal(unverifiable.code, 4)
   assert.equal(JSON.parse(unverifiable.stdout).state, 'UNVERIFIABLE')
+})
+
+test('verify accepts every current generic OCD attestation artifact purpose offline', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ocd-cli-'))
+  const purposes = [
+    'compliance-screening-result',
+    'public-action-receipt',
+    'erc20-allowance-action',
+    'swap-action',
+    'bridge-action',
+    'staking-action',
+  ]
+  for (const purpose of purposes) {
+    const { envelope, trust } = fixture(purpose)
+    const envelopePath = join(dir, `${purpose}.json`)
+    const trustPath = join(dir, `${purpose}-keys.json`)
+    writeFileSync(envelopePath, JSON.stringify(envelope))
+    writeFileSync(trustPath, JSON.stringify(trust))
+    const result = await run(['verify', envelopePath, '--trust', trustPath, '--json'])
+    assert.equal(result.code, 0, `${purpose}: ${result.stderr}`)
+    assert.equal(JSON.parse(result.stdout).state, 'VALID')
+  }
+})
+
+test('verify adapts the current Public Action Receipt wrapper without network access', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ocd-cli-'))
+  const { envelope, trust } = fixture('public-action-receipt')
+  const receiptPath = join(dir, 'receipt.json')
+  const trustPath = join(dir, 'keys.json')
+  writeFileSync(receiptPath, JSON.stringify({
+    schema: 'onchaindiligence.public-action-receipt.v1',
+    receipt: envelope.data,
+    proof: envelope.attestation,
+  }))
+  writeFileSync(trustPath, JSON.stringify(trust))
+  const result = await run(['verify', receiptPath, '--trust', trustPath, '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout).state, 'VALID')
+})
+
+test('malformed or ambiguous trust material is rejected without online fallback', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ocd-cli-'))
+  const { envelope, trust } = fixture()
+  const envelopePath = join(dir, 'attestation.json')
+  writeFileSync(envelopePath, JSON.stringify(envelope))
+  const cases = [
+    { name: 'wrong algorithm', material: { ...trust, keys: [{ ...trust.keys[0], algorithm: 'rsa' }] } },
+    { name: 'duplicate key id', material: { ...trust, keys: [trust.keys[0], { ...trust.keys[0] }] } },
+  ]
+  for (const item of cases) {
+    const trustPath = join(dir, `${item.name}.json`)
+    writeFileSync(trustPath, JSON.stringify(item.material))
+    const result = await run(['verify', envelopePath, '--trust', trustPath, '--json'])
+    assert.equal(result.code, 2, item.name)
+    assert.match(result.stderr, /trust file is invalid/, item.name)
+  }
 })
 
 test('verify never silently falls back to online key discovery', async () => {

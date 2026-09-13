@@ -29,8 +29,29 @@ npx @onchaindiligence/cli anchored <signature>
 ```
 
 `verify` exits `0` for `VALID`, `3` for `INVALID`, and `4` for
-`UNVERIFIABLE`. Usage errors exit `2`. With `--json`, the component-aware result
-is machine readable.
+`UNVERIFIABLE`. Usage errors, including malformed trust material, exit `2`.
+With `--json`, the component-aware result is machine readable. `VALID` means
+only that the signed bytes verify under the supplied trust policy; it does not
+mean an action was authorized, safe, settled, delivered, compliant, or
+economically successful.
+
+### Offline trust file
+
+`--trust` accepts a local JSON trust policy and performs zero network access.
+The stable form is a registry object with a `keys` array (a bare array remains
+accepted for CLI 0.2 compatibility). Each key must have a unique `key_id`,
+`algorithm: "ed25519"`, matching Ed25519 SPKI `public_key_pem`, and a lifecycle
+`status`. Timestamp lifecycle fields, when present, must be exact UTC ISO-8601
+timestamps. A missing `valid_from` is not guessed: verification reports
+`UNVERIFIABLE` for a matching signature until a defensible activation boundary
+is supplied.
+
+The generic verifier supports the current OCD attestation envelope purposes:
+compliance results, public Action Receipts, and allowance, swap, bridge, and
+staking artifacts. Public Action Receipt v1's `{ schema, receipt, proof }`
+wrapper is adapted to the same proof contract. The CLI verifies shared
+signature/provenance only; it does not reinterpret payment or action business
+semantics.
 
 ## Paid commands (need a payer key)
 

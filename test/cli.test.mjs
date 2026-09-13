@@ -161,6 +161,18 @@ test('verify recognizes portable bundles offline and preserves their distinct re
   assert.ok(Array.isArray(output.artifact_verifications))
   assert.ok(output.reconciliation)
   assert.ok(Array.isArray(output.limitations))
+
+  for (const [name, expectedCode, expectedState] of [
+    ['bundle-invalid-child.json', 3, 'INVALID'],
+    ['bundle-unverifiable-child.json', 4, 'UNVERIFIABLE'],
+  ]) {
+    const candidate = JSON.parse(readFileSync(join(corpus, name), 'utf8'))
+    writeFileSync(bundlePath, JSON.stringify(candidate))
+    writeFileSync(trustPath, JSON.stringify({ keys: candidate.verification_material.keys }))
+    const candidateResult = await run(['verify', bundlePath, '--trust', trustPath, '--json'])
+    assert.equal(candidateResult.code, expectedCode, candidateResult.stderr)
+    assert.equal(JSON.parse(candidateResult.stdout).state, expectedState)
+  }
 })
 
 test('malformed or ambiguous trust material is rejected without online fallback', async () => {

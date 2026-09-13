@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { mkdtempSync, writeFileSync, rmSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -51,7 +51,11 @@ test('packed installed CLI reports its manifest version and verifies a receipt w
 
   const dir = mkdtempSync(join(tmpdir(), 'ocd-cli-installed-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const install = await runNpm(['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false', tarball], { cwd: dir, env: { ...process.env, NPM_CONFIG_OFFLINE: 'true' } })
+  const localDependencies = [
+    process.env.OCD_AGENT_EVIDENCE_TARBALL,
+    process.env.OCD_SDK_TARBALL,
+  ].filter(Boolean)
+  const install = await runNpm(['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false', ...localDependencies, tarball], { cwd: dir, env: { ...process.env, NPM_CONFIG_OFFLINE: 'true' } })
   assert.equal(install.code, 0, install.stderr)
 
   const { envelope, trust } = fixture()
@@ -64,8 +68,23 @@ test('packed installed CLI reports its manifest version and verifies a receipt w
   const installedCli = join(dir, 'node_modules', '@onchaindiligence', 'cli', 'bin', 'cli.js')
   const version = await run(process.execPath, [installedCli, '--version'], { cwd: dir })
   assert.equal(version.code, 0, version.stderr)
-  assert.equal(version.stdout.trim(), '@onchaindiligence/cli 0.3.1')
+  assert.equal(version.stdout.trim(), '@onchaindiligence/cli 0.4.0')
   const verified = await run(process.execPath, [installedCli, 'verify', artifactPath, '--trust', trustPath, '--json'], { cwd: dir, env: { NODE_OPTIONS: `--import=${new URL(`file:///${hookPath.replace(/\\/g, '/')}`).href}` } })
   assert.equal(verified.code, 0, verified.stderr)
   assert.equal(JSON.parse(verified.stdout).state, 'VALID')
+
+  const corpus = join(root, 'node_modules', '@onchaindiligence', 'agent-evidence', 'conformance')
+  const bundle = JSON.parse(readFileSync(join(corpus, 'bundle-with-artifacts.json'), 'utf8'))
+  const bundlePath = join(dir, 'bundle.json')
+  const bundleTrustPath = join(dir, 'bundle-keys.json')
+  writeFileSync(bundlePath, JSON.stringify(bundle))
+  writeFileSync(bundleTrustPath, JSON.stringify({ keys: bundle.verification_material.keys }))
+  const bundleVerified = await run(process.execPath, [installedCli, 'verify', bundlePath, '--trust', bundleTrustPath, '--json'], { cwd: dir, env: { NODE_OPTIONS: `--import=${new URL(`file:///${hookPath.replace(/\\/g, '/')}`).href}` } })
+  assert.equal(bundleVerified.code, 0, bundleVerified.stderr)
+  const report = JSON.parse(bundleVerified.stdout)
+  assert.equal(report.state, 'VALID')
+  assert.equal(report.bundle_integrity.state, 'VALID')
+  assert.ok(Array.isArray(report.artifact_verifications))
+  assert.ok(report.reconciliation)
+  assert.ok(Array.isArray(report.limitations))
 })

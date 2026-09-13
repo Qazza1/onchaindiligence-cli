@@ -19,6 +19,7 @@
 import {
   OnchainDiligence,
   parseJsonNoDuplicateKeys,
+  verifyBundleOffline,
   verifyAttestationOffline,
   verifyAttestationOnline,
 } from '@onchaindiligence/sdk'
@@ -243,6 +244,7 @@ function normalizeTrustMaterial(value) {
     const validFrom = normalizedOptionalTimestamp(candidate.valid_from, `${label}.valid_from`)
     const validUntil = normalizedOptionalTimestamp(candidate.valid_until, `${label}.valid_until`)
     if (validFrom && validUntil && Date.parse(validUntil) < Date.parse(validFrom)) trustError(`${label} has an incoherent validity interval`)
+    const statusReason = normalizedOptionalString(candidate.status_reason, `${label}.status_reason`)
     return {
       key_id: candidate.key_id,
       algorithm: 'ed25519',
@@ -251,7 +253,7 @@ function normalizeTrustMaterial(value) {
       valid_from: validFrom,
       valid_until: validUntil,
       status_changed_at: normalizedOptionalTimestamp(candidate.status_changed_at, `${label}.status_changed_at`),
-      status_reason: normalizedOptionalString(candidate.status_reason, `${label}.status_reason`),
+      ...(statusReason === null ? {} : { status_reason: statusReason }),
       replacement_key_id: normalizedOptionalString(candidate.replacement_key_id, `${label}.replacement_key_id`),
       compromised_at: normalizedOptionalTimestamp(candidate.compromised_at, `${label}.compromised_at`),
     }
@@ -277,6 +279,13 @@ function normalizeArtifactForVerification(value) {
   return value
 }
 
+function isPortableBundle(value) {
+  return isRecord(value)
+    && value.media_type === 'application/vnd.onchaindiligence.agent-evidence+json'
+    && value.bundle_version === 'onchaindiligence.agent-evidence.bundle.v0'
+    && isRecord(value.envelope)
+}
+
 async function freeVerify(file) {
   if (flags.trust && flags.fetchKeys) {
     die('choose either --trust for offline verification or --fetch-keys for explicit online discovery', 2)
@@ -287,12 +296,17 @@ async function freeVerify(file) {
 
   let res
   try {
-    const artifact = normalizeArtifactForVerification(readJsonFile(file, 'artifact'))
+    const rawArtifact = readJsonFile(file, 'artifact')
     if (flags.trust) {
       const trust = normalizeTrustMaterial(readJsonFile(flags.trust, 'trust file'))
-      res = await verifyAttestationOffline(artifact, trust, { allowedPurposes: CURRENT_ATTESTATION_PURPOSES })
+      res = isPortableBundle(rawArtifact)
+        ? verifyBundleOffline(rawArtifact, trust.keys)
+        : await verifyAttestationOffline(normalizeArtifactForVerification(rawArtifact), trust, { allowedPurposes: CURRENT_ATTESTATION_PURPOSES })
     } else {
-      res = await verifyAttestationOnline(artifact, {
+      if (isPortableBundle(rawArtifact)) {
+        die('portable bundle verification requires --trust; online key discovery is not an offline bundle trust decision', 2)
+      }
+      res = await verifyAttestationOnline(normalizeArtifactForVerification(rawArtifact), {
         baseUrl: BASE_URL,
         trustRegistry: true,
         allowedPurposes: CURRENT_ATTESTATION_PURPOSES,
@@ -304,8 +318,14 @@ async function freeVerify(file) {
   if (flags.json) out(res)
   else {
     const marker = res.state === 'VALID' ? green('✓ VALID') : res.state === 'INVALID' ? red('✗ INVALID') : yellow('? UNVERIFIABLE')
-    process.stdout.write(`${marker}  ${res.reason}\n`)
-    process.stdout.write(dim(`  key: ${res.keyId || 'unresolved'}  code: ${res.code}\n`))
+    if (isPortableBundle(rawArtifact)) {
+      process.stdout.write(`${marker}  bundle integrity: ${res.bundle_integrity.state}\n`)
+      for (const artifact of res.artifact_verifications) process.stdout.write(dim(`  artifact ${artifact.record_id}: ${artifact.state}\n`))
+      process.stdout.write(dim(`  reconciliation: ${res.reconciliation ? 'present' : 'none'}; limitations: ${res.limitations.length}\n`))
+    } else {
+      process.stdout.write(`${marker}  ${res.reason}\n`)
+      process.stdout.write(dim(`  key: ${res.keyId || 'unresolved'}  code: ${res.code}\n`))
+    }
   }
   process.exit(res.state === 'VALID' ? 0 : res.state === 'INVALID' ? 3 : 4)
 }

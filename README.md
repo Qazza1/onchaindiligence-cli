@@ -18,6 +18,10 @@ These need nothing but Node 18+. Great for CI and quick checks.
 # Genuinely offline: no account and no network
 npx @onchaindiligence/cli verify result.json --trust keys.json
 
+# Portable bundle: reports outer integrity, every child result,
+# reconciliation metadata, and limitations
+npx @onchaindiligence/cli verify bundle.json --trust keys.json
+
 # Optional explicit online discovery (not the default)
 npx @onchaindiligence/cli verify result.json --fetch-keys
 

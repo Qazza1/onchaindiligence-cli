@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -142,6 +142,25 @@ test('verify adapts the current Public Action Receipt wrapper without network ac
   const result = await run(['verify', receiptPath, '--trust', trustPath, '--json'])
   assert.equal(result.code, 0, result.stderr)
   assert.equal(JSON.parse(result.stdout).state, 'VALID')
+})
+
+test('verify recognizes portable bundles offline and preserves their distinct report fields', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ocd-cli-bundle-'))
+  const corpus = join(here, '..', 'node_modules', '@onchaindiligence', 'agent-evidence', 'conformance')
+  const bundle = JSON.parse(readFileSync(join(corpus, 'bundle-with-artifacts.json'), 'utf8'))
+  const bundlePath = join(dir, 'bundle.json')
+  const trustPath = join(dir, 'keys.json')
+  writeFileSync(bundlePath, JSON.stringify(bundle))
+  writeFileSync(trustPath, JSON.stringify({ keys: bundle.verification_material.keys }))
+
+  const result = await run(['verify', bundlePath, '--trust', trustPath, '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  const output = JSON.parse(result.stdout)
+  assert.equal(output.bundle_integrity.state, 'VALID')
+  assert.equal(output.state, 'VALID')
+  assert.ok(Array.isArray(output.artifact_verifications))
+  assert.ok(output.reconciliation)
+  assert.ok(Array.isArray(output.limitations))
 })
 
 test('malformed or ambiguous trust material is rejected without online fallback', async () => {

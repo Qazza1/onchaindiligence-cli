@@ -13,10 +13,37 @@ jobs:
   offline-cli:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
+      # The 0.4.0 candidate deliberately depends on unpublished SDK 0.7.0.
+      # Assemble the exact core and SDK candidates locally so CI never treats
+      # an unavailable registry tarball as a product/test failure.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Qazza1/onchaindiligence
+          ref: 2e715a8c506ea45079d1b2fea76140706552cfc6
+          path: .d42-core
+          persist-credentials: false
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: .d42-core
+      - run: npm pack --pack-destination "${RUNNER_TEMP}"
+        working-directory: .d42-core/packages/agent-evidence
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Qazza1/onchaindiligence-sdk
+          ref: 08c526fbe4542278d60a2c1e4e2f874b311ec13f
+          path: .d42-sdk
+          persist-credentials: false
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: .d42-sdk
+      - run: npm install --no-save --ignore-scripts --no-audit --no-fund "${RUNNER_TEMP}/onchaindiligence-agent-evidence-0.3.0.tgz"
+        working-directory: .d42-sdk
+      - run: npm run build
+        working-directory: .d42-sdk
+      - run: npm pack --pack-destination "${RUNNER_TEMP}"
+        working-directory: .d42-sdk
+      - run: npm install --no-save --ignore-scripts --no-audit --no-fund "${RUNNER_TEMP}/onchaindiligence-agent-evidence-0.3.0.tgz" "${RUNNER_TEMP}/onchaindiligence-sdk-0.7.0.tgz"
       - run: npm test

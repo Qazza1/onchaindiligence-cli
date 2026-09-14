@@ -55,7 +55,10 @@ test('packed installed CLI reports its manifest version and verifies a receipt w
     process.env.OCD_AGENT_EVIDENCE_TARBALL,
     process.env.OCD_SDK_TARBALL,
   ].filter(Boolean)
-  const install = await runNpm(['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false', ...localDependencies, tarball], { cwd: dir, env: { ...process.env, NPM_CONFIG_OFFLINE: 'true' } })
+  // Installing a packed package may resolve its normal transitive runtime
+  // dependencies. The following CLI processes, not npm installation, are the
+  // zero-network verification boundary and are explicitly blocked below.
+  const install = await runNpm(['install', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false', ...localDependencies, tarball], { cwd: dir, env: process.env })
   assert.equal(install.code, 0, install.stderr)
 
   const { envelope, trust } = fixture()

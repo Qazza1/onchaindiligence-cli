@@ -153,6 +153,13 @@ test('verify recognizes portable bundles offline and preserves their distinct re
   writeFileSync(bundlePath, JSON.stringify(bundle))
   writeFileSync(trustPath, JSON.stringify({ keys: bundle.verification_material.keys }))
 
+  const documented = await run(['verify', bundlePath, '--trust', trustPath])
+  assert.equal(documented.code, 0, documented.stderr)
+  assert.match(documented.stdout, /bundle integrity: VALID/)
+  assert.match(documented.stdout, /artifact sha256:/)
+  assert.match(documented.stdout, /insufficient_evidence:/)
+  assert.match(documented.stdout, /limitation:/)
+
   const result = await run(['verify', bundlePath, '--trust', trustPath, '--json'])
   assert.equal(result.code, 0, result.stderr)
   const output = JSON.parse(result.stdout)
@@ -173,6 +180,12 @@ test('verify recognizes portable bundles offline and preserves their distinct re
     assert.equal(candidateResult.code, expectedCode, candidateResult.stderr)
     assert.equal(JSON.parse(candidateResult.stdout).state, expectedState)
   }
+})
+
+test('--version reads installed package metadata', async () => {
+  const result = await run(['--version'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.stdout.trim(), '@onchaindiligence/cli 0.4.0')
 })
 
 test('malformed or ambiguous trust material is rejected without online fallback', async () => {

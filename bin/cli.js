@@ -294,9 +294,10 @@ async function freeVerify(file) {
     die('verify requires --trust <keys.json>; use --fetch-keys only when online registry trust is intentional', 2)
   }
 
+  let rawArtifact
   let res
   try {
-    const rawArtifact = readJsonFile(file, 'artifact')
+    rawArtifact = readJsonFile(file, 'artifact')
     if (flags.trust) {
       const trust = normalizeTrustMaterial(readJsonFile(flags.trust, 'trust file'))
       res = isPortableBundle(rawArtifact)
@@ -321,7 +322,16 @@ async function freeVerify(file) {
     if (isPortableBundle(rawArtifact)) {
       process.stdout.write(`${marker}  bundle integrity: ${res.bundle_integrity.state}\n`)
       for (const artifact of res.artifact_verifications) process.stdout.write(dim(`  artifact ${artifact.record_id}: ${artifact.state}\n`))
-      process.stdout.write(dim(`  reconciliation: ${res.reconciliation ? 'present' : 'none'}; limitations: ${res.limitations.length}\n`))
+      const reconciliation = res.reconciliation
+      if (!reconciliation) process.stdout.write(dim('  reconciliation: none\n'))
+      else {
+        for (const group of ['agreements', 'contradictions', 'insufficient_evidence']) {
+          for (const item of reconciliation[group] ?? []) {
+            process.stdout.write(dim(`  ${group}: ${item.summary}\n`))
+          }
+        }
+      }
+      for (const limitation of res.limitations) process.stdout.write(dim(`  limitation: ${limitation}\n`))
     } else {
       process.stdout.write(`${marker}  ${res.reason}\n`)
       process.stdout.write(dim(`  key: ${res.keyId || 'unresolved'}  code: ${res.code}\n`))

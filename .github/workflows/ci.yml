@@ -27,7 +27,7 @@ jobs:
           ref: 2e715a8c506ea45079d1b2fea76140706552cfc6
           path: .d42-core
           persist-credentials: false
-      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm install --ignore-scripts --no-audit --no-fund
         working-directory: .d42-core
       - run: npm pack --pack-destination "${RUNNER_TEMP}"
         working-directory: .d42-core/packages/agent-evidence
@@ -37,8 +37,6 @@ jobs:
           ref: 08c526fbe4542278d60a2c1e4e2f874b311ec13f
           path: .d42-sdk
           persist-credentials: false
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-        working-directory: .d42-sdk
       - run: npm install --no-save --ignore-scripts --no-audit --no-fund "${RUNNER_TEMP}/onchaindiligence-agent-evidence-0.3.0.tgz"
         working-directory: .d42-sdk
       - run: npm run build

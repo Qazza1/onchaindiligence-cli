@@ -45,3 +45,6 @@ jobs:
         working-directory: .d42-sdk
       - run: npm install --no-save --ignore-scripts --no-audit --no-fund "${RUNNER_TEMP}/onchaindiligence-agent-evidence-0.3.0.tgz" "${RUNNER_TEMP}/onchaindiligence-sdk-0.7.0.tgz"
       - run: npm test
+        env:
+          OCD_AGENT_EVIDENCE_TARBALL: ${{ runner.temp }}/onchaindiligence-agent-evidence-0.3.0.tgz
+          OCD_SDK_TARBALL: ${{ runner.temp }}/onchaindiligence-sdk-0.7.0.tgz
